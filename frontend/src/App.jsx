@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  ArrowUpRight,
   Activity,
   Bell,
   CalendarDays,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 
 import initialBoards from "./data/boards.js";
+import KanbanBoard from "./components/KanbanBoard.jsx";
 
 const navigation = [
   { label: "Overview", icon: LayoutDashboard },
@@ -210,7 +212,7 @@ function StatCard({ label, value, caption, icon: Icon, iconStyle }) {
   );
 }
 
-function BoardCard({ board }) {
+function BoardCard({ board, onOpen }) {
   const colors = palette[board.color] || palette.blue;
   const progress =
     board.total > 0 ? Math.round((board.done / board.total) * 100) : 0;
@@ -286,6 +288,15 @@ function BoardCard({ board }) {
           <span>{board.due}</span>
         </div>
       </div>
+
+      <button
+        type="button"
+        onClick={() => onOpen(board)}
+        className="mt-4 flex w-full items-center justify-between rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700"
+      >
+        Open board
+        <ArrowUpRight size={16} />
+      </button>
     </article>
   );
 }
@@ -406,6 +417,7 @@ export default function App() {
   const [createOpen, setCreateOpen] = useState(false);
   const [boardName, setBoardName] = useState("");
   const [boardDescription, setBoardDescription] = useState("");
+  const [selectedBoard, setSelectedBoard] = useState(null);
 
   const filteredBoards = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -422,6 +434,11 @@ export default function App() {
   const totalTasks = boards.reduce((sum, board) => sum + board.total, 0);
   const completedTasks = boards.reduce((sum, board) => sum + board.done, 0);
   const openTasks = totalTasks - completedTasks;
+
+  function handleSectionChange(section) {
+    setActiveSection(section);
+    setSelectedBoard(null);
+  }
 
   function closeCreateModal() {
     setCreateOpen(false);
@@ -454,8 +471,9 @@ export default function App() {
     closeCreateModal();
   }
 
-  const pageTitle =
-    activeSection === "Overview"
+  const pageTitle = selectedBoard
+    ? selectedBoard.name
+    : activeSection === "Overview"
       ? "Overview"
       : activeSection === "My Tasks"
         ? "My Tasks"
@@ -467,7 +485,7 @@ export default function App() {
     <div className="min-h-screen bg-[#f7f8fc] text-slate-800">
       <Sidebar
         activeSection={activeSection}
-        setActiveSection={setActiveSection}
+        setActiveSection={handleSectionChange}
         mobileOpen={mobileOpen}
         setMobileOpen={setMobileOpen}
       />
@@ -512,7 +530,13 @@ export default function App() {
         </header>
 
         <main className="mx-auto max-w-7xl px-4 py-7 sm:px-7 sm:py-9 lg:px-9">
-          {activeSection === "Settings" ? (
+          {selectedBoard ? (
+            <KanbanBoard
+              key={selectedBoard.id}
+              board={selectedBoard}
+              onBack={() => setSelectedBoard(null)}
+            />
+          ) : activeSection === "Settings" ? (
             <ComingSoon
               title="Workspace settings"
               description="Workspace preferences and account settings will be added in a later milestone."
@@ -605,7 +629,14 @@ export default function App() {
 
                 <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                   {filteredBoards.map((board) => (
-                    <BoardCard key={board.id} board={board} />
+                    <BoardCard
+                      key={board.id}
+                      board={board}
+                      onOpen={(selected) => {
+                        setSelectedBoard(selected);
+                        setActiveSection("My Boards");
+                      }}
+                    />
                   ))}
                 </div>
 
