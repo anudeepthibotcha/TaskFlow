@@ -13,6 +13,7 @@ const taskSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: "",
+      maxlength: 1000,
     },
     boardId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -28,13 +29,35 @@ const taskSchema = new mongoose.Schema(
     },
     position: {
       type: Number,
-      required: true,
       min: 0,
       default: 0,
+    },
+    label: {
+      type: String,
+      trim: true,
+      default: "Product",
+      maxlength: 50,
     },
     labels: {
       type: [String],
       default: [],
+    },
+    priority: {
+      type: String,
+      enum: ["Low", "Medium", "High"],
+      default: "Medium",
+    },
+    dueDate: {
+      type: String,
+      trim: true,
+      default: "Not set",
+      maxlength: 50,
+    },
+    assignee: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: 100,
     },
   },
   { timestamps: true }

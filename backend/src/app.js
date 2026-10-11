@@ -4,10 +4,12 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import passport from "passport";
-
 import "./config/passport.js";
 import healthRoutes from "./routes/healthRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
+import boardRoutes from "./routes/boardRoutes.js";
+import columnRoutes from "./routes/columnRoutes.js";
+import taskRoutes from "./routes/taskRoutes.js";
 
 const app = express();
 
@@ -40,6 +42,9 @@ app.use("/api/health", healthRoutes);
 
 // Day 2 authentication routes
 app.use("/api/auth", authRoutes);
+app.use("/api/boards", boardRoutes);
+app.use("/api", columnRoutes);
+app.use("/api", taskRoutes);
 
 // Handle unknown routes
 app.use((req, res) => {
