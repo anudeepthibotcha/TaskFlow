@@ -1,20 +1,22 @@
-
 import express from "express";
 import mongoose from "mongoose";
 
-import Board from "../models/Board.js";
 import Column from "../models/Column.js";
 import Task from "../models/Task.js";
 import requireAuth from "../middleware/requireAuth.js";
+
 import {
   findOwnedBoard,
   isValidId,
   taskToDto,
 } from "../utils/boardData.js";
+
 import {
   handleRouteError,
   httpError,
 } from "../utils/routeError.js";
+
+import { emitBoardEvent } from "../utils/boardEvents.js";
 
 const router = express.Router();
 
@@ -32,7 +34,9 @@ router.get("/boards/:boardId/tasks", async (req, res) => {
       throw httpError(404, "Board not found");
     }
 
-    const filter = { boardId: board._id };
+    const filter = {
+      boardId: board._id,
+    };
 
     if (req.query.columnId !== undefined) {
       if (!isValidId(req.query.columnId)) {
@@ -92,11 +96,17 @@ router.post("/boards/:boardId/tasks", async (req, res) => {
       !title.trim() ||
       title.trim().length > 200
     ) {
-      throw httpError(400, "A valid task title is required");
+      throw httpError(
+        400,
+        "A valid task title is required"
+      );
     }
 
     if (!isValidId(columnId)) {
-      throw httpError(400, "A valid column ID is required");
+      throw httpError(
+        400,
+        "A valid column ID is required"
+      );
     }
 
     const column = await Column.findOne({
@@ -105,7 +115,10 @@ router.post("/boards/:boardId/tasks", async (req, res) => {
     });
 
     if (!column) {
-      throw httpError(400, "Column does not belong to this board");
+      throw httpError(
+        400,
+        "Column does not belong to this board"
+      );
     }
 
     if (
@@ -132,6 +145,11 @@ router.post("/boards/:boardId/tasks", async (req, res) => {
       assignee,
     });
 
+    // Notify connected clients after task creation succeeds.
+    emitBoardEvent(req, "task:created", board._id, {
+      taskId: task._id.toString(),
+    });
+
     return res.status(201).json({
       success: true,
       message: "Task created successfully",
@@ -153,7 +171,10 @@ router.patch(
       const { columns } = req.body ?? {};
 
       if (!Array.isArray(columns)) {
-        throw httpError(400, "A columns array is required");
+        throw httpError(
+          400,
+          "A columns array is required"
+        );
       }
 
       session = await mongoose.startSession();
@@ -182,10 +203,16 @@ router.patch(
         );
 
         if (
-          requestedColumnIds.some((id) => !isValidId(id)) ||
-          new Set(requestedColumnIds).size !== requestedColumnIds.length ||
-          existingColumnIds.length !== requestedColumnIds.length ||
-          existingColumnIds.some((id) => !requestedColumnIds.includes(id))
+          requestedColumnIds.some(
+            (id) => !isValidId(id)
+          ) ||
+          new Set(requestedColumnIds).size !==
+            requestedColumnIds.length ||
+          existingColumnIds.length !==
+            requestedColumnIds.length ||
+          existingColumnIds.some(
+            (id) => !requestedColumnIds.includes(id)
+          )
         ) {
           throw httpError(
             400,
@@ -195,11 +222,21 @@ router.patch(
 
         for (const column of columns) {
           if (!Array.isArray(column.taskIds)) {
-            throw httpError(400, "Each column must contain taskIds");
+            throw httpError(
+              400,
+              "Each column must contain taskIds"
+            );
           }
 
-          if (column.taskIds.some((id) => !isValidId(id))) {
-            throw httpError(400, "Invalid task ID in reorder request");
+          if (
+            column.taskIds.some(
+              (id) => !isValidId(id)
+            )
+          ) {
+            throw httpError(
+              400,
+              "Invalid task ID in reorder request"
+            );
           }
         }
 
@@ -208,7 +245,8 @@ router.patch(
         );
 
         if (
-          new Set(requestedTaskIds).size !== requestedTaskIds.length
+          new Set(requestedTaskIds).size !==
+          requestedTaskIds.length
         ) {
           throw httpError(
             400,
@@ -218,15 +256,20 @@ router.patch(
 
         const existingTasks = await Task.find({
           boardId: board._id,
-        }).select("_id").session(session);
+        })
+          .select("_id")
+          .session(session);
 
         const existingTaskIds = existingTasks.map(
           (task) => task._id.toString()
         );
 
         if (
-          existingTaskIds.length !== requestedTaskIds.length ||
-          existingTaskIds.some((id) => !requestedTaskIds.includes(id))
+          existingTaskIds.length !==
+            requestedTaskIds.length ||
+          existingTaskIds.some(
+            (id) => !requestedTaskIds.includes(id)
+          )
         ) {
           throw httpError(
             400,
@@ -234,9 +277,13 @@ router.patch(
           );
         }
 
-        // Do writes sequentially within the transaction.
+        // Update the tasks sequentially within the transaction.
         for (const column of columns) {
-          for (let position = 0; position < column.taskIds.length; position++) {
+          for (
+            let position = 0;
+            position < column.taskIds.length;
+            position++
+          ) {
             const result = await Task.updateOne(
               {
                 _id: column.taskIds[position],
@@ -248,7 +295,9 @@ router.patch(
                   position,
                 },
               },
-              { session }
+              {
+                session,
+              }
             );
 
             if (result.matchedCount !== 1) {
@@ -261,6 +310,16 @@ router.patch(
         }
       });
 
+      // Emit the event only after the transaction succeeds.
+      emitBoardEvent(
+        req,
+        "task:moved",
+        req.params.boardId,
+        {
+          action: "reordered",
+        }
+      );
+
       return res.json({
         success: true,
         message: "Task ordering saved successfully",
@@ -268,7 +327,9 @@ router.patch(
     } catch (error) {
       return handleRouteError(res, error);
     } finally {
-      if (session) await session.endSession();
+      if (session) {
+        await session.endSession();
+      }
     }
   }
 );
@@ -297,6 +358,9 @@ router.patch("/tasks/:taskId", async (req, res) => {
       throw httpError(404, "Task not found");
     }
 
+    // Save the original column to detect whether the task moves.
+    const originalColumnId = task.columnId.toString();
+
     const fields = [
       "title",
       "description",
@@ -323,10 +387,16 @@ router.patch("/tasks/:taskId", async (req, res) => {
       });
 
       if (!targetColumn) {
-        throw httpError(400, "Column does not belong to this board");
+        throw httpError(
+          400,
+          "Column does not belong to this board"
+        );
       }
 
-      if (targetColumn._id.toString() !== task.columnId.toString()) {
+      if (
+        targetColumn._id.toString() !==
+        task.columnId.toString()
+      ) {
         task.columnId = targetColumn._id;
 
         if (req.body.position === undefined) {
@@ -343,13 +413,31 @@ router.patch("/tasks/:taskId", async (req, res) => {
         !Number.isInteger(req.body.position) ||
         req.body.position < 0
       ) {
-        throw httpError(400, "Position must be a non-negative integer");
+        throw httpError(
+          400,
+          "Position must be a non-negative integer"
+        );
       }
 
       task.position = req.body.position;
     }
 
     await task.save();
+
+    const newColumnId = task.columnId.toString();
+
+    // Emit the correct event based on whether the column changed.
+    emitBoardEvent(
+      req,
+      newColumnId !== originalColumnId
+        ? "task:moved"
+        : "task:updated",
+      board._id,
+      {
+        taskId: task._id.toString(),
+        columnId: newColumnId,
+      }
+    );
 
     return res.json({
       success: true,
@@ -388,6 +476,12 @@ router.delete("/tasks/:taskId", async (req, res) => {
     await Task.deleteOne({
       _id: task._id,
       boardId: board._id,
+    });
+
+    // Notify connected clients after the deletion succeeds.
+    emitBoardEvent(req, "task:deleted", board._id, {
+      taskId: task._id.toString(),
+      columnId: task.columnId.toString(),
     });
 
     return res.json({

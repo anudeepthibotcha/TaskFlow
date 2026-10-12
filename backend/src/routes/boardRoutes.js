@@ -6,6 +6,7 @@ import Board from "../models/Board.js";
 import Column from "../models/Column.js";
 import Task from "../models/Task.js";
 import requireAuth from "../middleware/requireAuth.js";
+import { emitBoardEvent } from "../utils/boardEvents.js";
 import {
   buildBoardDto,
   findOwnedBoard,
@@ -178,6 +179,7 @@ router.patch("/:boardId", async (req, res) => {
 
     Object.assign(board, updates);
     await board.save();
+    emitBoardEvent(req, "board:updated", board._id);
 
     return res.json({
       success: true,
@@ -221,6 +223,8 @@ router.delete("/:boardId", async (req, res) => {
         { session }
       );
     });
+
+    emitBoardEvent(req, "board:deleted", req.params.boardId);
 
     return res.json({
       success: true,

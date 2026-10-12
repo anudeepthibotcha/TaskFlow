@@ -1,5 +1,4 @@
-
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   CalendarDays,
@@ -12,10 +11,14 @@ import {
   X,
 } from "lucide-react";
 
-import { DragDropProvider, useDroppable } from "@dnd-kit/react";
+import {
+  DragDropProvider,
+  useDroppable,
+} from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
 
+import { createTaskFlowSocket } from "../socket.js";
 import { api } from "../api.js";
 
 const LABEL_STYLES = {
@@ -89,6 +92,7 @@ function TaskCard({ task, index, columnId, onEdit, onDelete }) {
               >
                 <Pencil size={14} />
               </button>
+
               <button
                 type="button"
                 onClick={() => onDelete(task)}
@@ -111,10 +115,7 @@ function TaskCard({ task, index, columnId, onEdit, onDelete }) {
 
           <div className="mt-4 flex items-center justify-between gap-2">
             <span
-              className={`rounded-md px-2 py-1 text-[10px] font-semibold ${
-                PRIORITY_STYLES[task.priority] ||
-                PRIORITY_STYLES.Medium
-              }`}
+              className={`rounded-md px-2 py-1 text-[10px] font-semibold ${priorityStyle}`}
             >
               {task.priority || "Medium"} priority
             </span>
@@ -178,9 +179,11 @@ function BoardColumn({
               dotColors[index % dotColors.length]
             }`}
           />
+
           <h3 className="truncate text-sm font-bold text-slate-800">
             {column.title}
           </h3>
+
           <span className="rounded-md bg-white px-2 py-0.5 text-xs font-semibold text-slate-600">
             {tasks.length}
           </span>
@@ -193,6 +196,7 @@ function BoardColumn({
           >
             <MoreHorizontal size={18} />
           </summary>
+
           <div className="absolute right-0 top-9 z-20 w-40 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
             <button
               type="button"
@@ -201,6 +205,7 @@ function BoardColumn({
             >
               Rename column
             </button>
+
             <button
               type="button"
               onClick={() => onDeleteColumn(column)}
@@ -269,8 +274,11 @@ function TaskFormModal({
             >
               {task ? "Edit task" : "Create task"}
             </h2>
+
             <p className="mt-1 text-sm text-slate-500">
-              {task ? "Update the task details." : `Add to ${columnTitle}.`}
+              {task
+                ? "Update the task details."
+                : `Add to ${columnTitle}.`}
             </p>
           </div>
 
@@ -290,6 +298,7 @@ function TaskFormModal({
         >
           Title
         </label>
+
         <input
           id="task-title"
           required
@@ -308,6 +317,7 @@ function TaskFormModal({
         >
           Description
         </label>
+
         <textarea
           id="task-description"
           rows={3}
@@ -327,6 +337,7 @@ function TaskFormModal({
             >
               Label
             </label>
+
             <select
               id="task-label"
               value={draft.label}
@@ -351,6 +362,7 @@ function TaskFormModal({
             >
               Priority
             </label>
+
             <select
               id="task-priority"
               value={draft.priority}
@@ -372,6 +384,7 @@ function TaskFormModal({
         >
           Assignee initials (optional)
         </label>
+
         <input
           id="task-assignee"
           maxLength={100}
@@ -389,6 +402,7 @@ function TaskFormModal({
         >
           Due date (optional)
         </label>
+
         <input
           id="task-due-date"
           type="date"
@@ -414,12 +428,17 @@ function TaskFormModal({
           >
             Cancel
           </button>
+
           <button
             type="submit"
             disabled={saving}
             className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
           >
-            {saving ? "Saving..." : task ? "Save changes" : "Create task"}
+            {saving
+              ? "Saving..."
+              : task
+                ? "Save changes"
+                : "Create task"}
           </button>
         </div>
       </form>
@@ -436,7 +455,11 @@ const EMPTY_DRAFT = {
   assignee: "",
 };
 
-export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
+export default function KanbanBoard({
+  board,
+  onBack,
+  onBoardUpdated,
+}) {
   const [columns, setColumns] = useState(board.columns || []);
 
   const initialTasks = Object.fromEntries(
@@ -455,6 +478,208 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // Real-time connection and presence state.
+  const [realtimeStatus, setRealtimeStatus] = useState("connecting");
+  const [presenceNotice, setPresenceNotice] = useState("");
+
+  // Subscribe to live board changes.
+  useEffect(() => {
+    const socket = createTaskFlowSocket();
+    let active = true;
+
+    async function refreshFromServer(payload) {
+      if (
+        payload?.boardId &&
+        String(payload.boardId) !== String(board.id)
+      ) {
+        return;
+      }
+
+      try {
+        const result = await api(`/boards/${board.id}`);
+
+        if (!active) return;
+
+        const latestColumns = result.board.columns || [];
+
+        const nextTasks = Object.fromEntries(
+          latestColumns.map((column) => [
+            column.id,
+            column.tasks || [],
+          ])
+        );
+
+        setColumns(latestColumns);
+
+        // Synchronize rendered state and the drag-and-drop reference.
+        tasksRef.current = nextTasks;
+        setTasksByColumn(nextTasks);
+
+        // Refresh dashboard summaries when a callback is provided.
+        await onBoardUpdated?.();
+      } catch (err) {
+        if (!active) return;
+
+        setError(
+          `Unable to refresh board: ${err.message}`
+        );
+      }
+    }
+
+    function handleConnect() {
+      if (!active) return;
+
+      setRealtimeStatus("joining");
+
+      // Join the board room after each connection or reconnection.
+      socket.emit(
+        "board:join",
+        { boardId: board.id },
+        async (result) => {
+          if (!active) return;
+
+          if (!result?.ok) {
+            setRealtimeStatus("offline");
+
+            setError(
+              result?.message ||
+                "Unable to join the board room"
+            );
+
+            return;
+          }
+
+          setRealtimeStatus("live");
+
+          // Fetch the current database state after joining.
+          await refreshFromServer({
+            boardId: board.id,
+          });
+        }
+      );
+    }
+
+    function handleDisconnect() {
+      if (!active) return;
+
+      setRealtimeStatus("reconnecting");
+    }
+
+    function handleConnectError(socketError) {
+      if (!active) return;
+
+      setRealtimeStatus("offline");
+
+      setError(
+        `Real-time connection failed: ${socketError.message}`
+      );
+    }
+
+    function handleBoardChange(payload) {
+      void refreshFromServer(payload);
+    }
+
+    function handleUserJoined(payload) {
+      if (
+        payload?.boardId &&
+        String(payload.boardId) !== String(board.id)
+      ) {
+        return;
+      }
+
+      if (payload?.user?.name) {
+        setPresenceNotice(
+          `${payload.user.name} joined this board.`
+        );
+      }
+    }
+
+    function handleUserLeft(payload) {
+      if (
+        payload?.boardId &&
+        String(payload.boardId) !== String(board.id)
+      ) {
+        return;
+      }
+
+      if (payload?.user?.name) {
+        setPresenceNotice(
+          `${payload.user.name} left this board.`
+        );
+      }
+    }
+
+    async function handleBoardDeleted(payload) {
+      if (
+        payload?.boardId &&
+        String(payload.boardId) !== String(board.id)
+      ) {
+        return;
+      }
+
+      setError(
+        "This board was deleted or access was removed."
+      );
+
+      try {
+        await onBoardUpdated?.();
+      } catch (err) {
+        console.error(
+          "Unable to refresh boards after deletion:",
+          err
+        );
+      } finally {
+        if (active) {
+          onBack();
+        }
+      }
+    }
+
+    const boardEvents = [
+      "task:moved",
+      "task:created",
+      "task:updated",
+      "task:deleted",
+      "column:created",
+      "column:updated",
+      "column:deleted",
+      "board:updated",
+    ];
+
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
+    socket.on("connect_error", handleConnectError);
+
+    boardEvents.forEach((eventName) => {
+      socket.on(eventName, handleBoardChange);
+    });
+
+    socket.on("user:joined", handleUserJoined);
+    socket.on("user:left", handleUserLeft);
+    socket.on("board:deleted", handleBoardDeleted);
+
+    socket.connect();
+
+    return () => {
+      active = false;
+
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("connect_error", handleConnectError);
+
+      boardEvents.forEach((eventName) => {
+        socket.off(eventName, handleBoardChange);
+      });
+
+      socket.off("user:joined", handleUserJoined);
+      socket.off("user:left", handleUserLeft);
+      socket.off("board:deleted", handleBoardDeleted);
+
+      // Disconnecting removes this socket from its board rooms.
+      socket.disconnect();
+    };
+  }, [board.id]);
+
   function updateTasks(nextOrUpdater) {
     const next =
       typeof nextOrUpdater === "function"
@@ -466,7 +691,10 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
   }
 
   function showError(err) {
-    setError(err.message || "The operation could not be completed.");
+    setError(
+      err.message ||
+        "The operation could not be completed."
+    );
   }
 
   async function refreshDashboard() {
@@ -478,22 +706,29 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
   }
 
   async function handleCreateColumn() {
-    const title = window.prompt("Enter a name for the new column:");
+    const title = window.prompt(
+      "Enter a name for the new column:"
+    );
 
     if (!title?.trim()) return;
 
     setError("");
 
     try {
-      const result = await api(`/boards/${board.id}/columns`, {
-        method: "POST",
-        body: { title: title.trim() },
-      });
+      const result = await api(
+        `/boards/${board.id}/columns`,
+        {
+          method: "POST",
+          body: { title: title.trim() },
+        }
+      );
 
       const newColumn = result.column;
 
       setColumns((current) =>
-        [...current, newColumn].sort((a, b) => a.position - b.position)
+        [...current, newColumn].sort(
+          (a, b) => a.position - b.position
+        )
       );
 
       updateTasks({
@@ -508,22 +743,36 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
   }
 
   async function handleRenameColumn(column) {
-    const title = window.prompt("Enter the new column name:", column.title);
+    const title = window.prompt(
+      "Enter the new column name:",
+      column.title
+    );
 
-    if (!title?.trim() || title.trim() === column.title) return;
+    if (
+      !title?.trim() ||
+      title.trim() === column.title
+    ) {
+      return;
+    }
 
     setError("");
 
     try {
-      const result = await api(`/columns/${column.id}`, {
-        method: "PATCH",
-        body: { title: title.trim() },
-      });
+      const result = await api(
+        `/columns/${column.id}`,
+        {
+          method: "PATCH",
+          body: { title: title.trim() },
+        }
+      );
 
       setColumns((current) =>
         current.map((item) =>
           item.id === column.id
-            ? { ...item, title: result.column.title }
+            ? {
+                ...item,
+                title: result.column.title,
+              }
             : item
         )
       );
@@ -544,14 +793,20 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
     setError("");
 
     try {
-      await api(`/columns/${column.id}`, { method: "DELETE" });
+      await api(`/columns/${column.id}`, {
+        method: "DELETE",
+      });
 
       setColumns((current) =>
-        current.filter((item) => item.id !== column.id)
+        current.filter(
+          (item) => item.id !== column.id
+        )
       );
 
       const next = { ...tasksRef.current };
+
       delete next[column.id];
+
       updateTasks(next);
 
       await refreshDashboard();
@@ -602,25 +857,35 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
 
     try {
       if (taskModal.task) {
-        const result = await api(`/tasks/${taskModal.task.id}`, {
-          method: "PATCH",
-          body,
-        });
+        const result = await api(
+          `/tasks/${taskModal.task.id}`,
+          {
+            method: "PATCH",
+            body,
+          }
+        );
 
         updateTasks((current) => ({
           ...current,
-          [taskModal.columnId]: current[taskModal.columnId].map((task) =>
-            task.id === result.task.id ? result.task : task
+          [taskModal.columnId]: (
+            current[taskModal.columnId] || []
+          ).map((task) =>
+            task.id === result.task.id
+              ? result.task
+              : task
           ),
         }));
       } else {
-        const result = await api(`/boards/${board.id}/tasks`, {
-          method: "POST",
-          body: {
-            ...body,
-            columnId: taskModal.columnId,
-          },
-        });
+        const result = await api(
+          `/boards/${board.id}/tasks`,
+          {
+            method: "POST",
+            body: {
+              ...body,
+              columnId: taskModal.columnId,
+            },
+          }
+        );
 
         updateTasks((current) => ({
           ...current,
@@ -632,6 +897,7 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
       }
 
       closeTaskForm();
+
       await refreshDashboard();
     } catch (err) {
       showError(err);
@@ -641,22 +907,30 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
   }
 
   async function handleDeleteTask(task) {
-    const confirmed = window.confirm(`Delete "${task.title}"?`);
+    const confirmed = window.confirm(
+      `Delete "${task.title}"?`
+    );
 
     if (!confirmed) return;
 
     setError("");
 
     try {
-      await api(`/tasks/${task.id}`, { method: "DELETE" });
+      await api(`/tasks/${task.id}`, {
+        method: "DELETE",
+      });
 
       updateTasks((current) => ({
         ...current,
         ...Object.fromEntries(
-          Object.entries(current).map(([columnId, tasks]) => [
-            columnId,
-            tasks.filter((item) => item.id !== task.id),
-          ])
+          Object.entries(current).map(
+            ([columnId, tasks]) => [
+              columnId,
+              tasks.filter(
+                (item) => item.id !== task.id
+              ),
+            ]
+          )
         ),
       }));
 
@@ -670,33 +944,47 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
     const payload = {
       columns: columns.map((column) => ({
         columnId: column.id,
-        taskIds: (finalTasks[column.id] || []).map((task) => task.id),
+        taskIds: (
+          finalTasks[column.id] || []
+        ).map((task) => task.id),
       })),
     };
 
     try {
-      await api(`/boards/${board.id}/tasks/reorder`, {
-        method: "PATCH",
-        body: payload,
-      });
+      await api(
+        `/boards/${board.id}/tasks/reorder`,
+        {
+          method: "PATCH",
+          body: payload,
+        }
+      );
 
       await refreshDashboard();
     } catch (err) {
-      updateTasks(structuredClone(previousTasks.current));
+      updateTasks(
+        structuredClone(previousTasks.current)
+      );
+
       showError(err);
     }
   }
 
-  const totalTasks = Object.values(tasksByColumn).reduce(
+  const totalTasks = Object.values(
+    tasksByColumn
+  ).reduce(
     (total, tasks) => total + tasks.length,
     0
   );
 
   const completedTasks = columns
-    .filter((column) => column.title.trim().toLowerCase() === "done")
+    .filter(
+      (column) =>
+        column.title.trim().toLowerCase() === "done"
+    )
     .reduce(
       (total, column) =>
-        total + (tasksByColumn[column.id] || []).length,
+        total +
+        (tasksByColumn[column.id] || []).length,
       0
     );
 
@@ -716,23 +1004,74 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
           <p className="text-sm font-medium text-violet-700">
             Project workspace
           </p>
+
           <h2 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
             {board.name}
           </h2>
+
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-            {board.description || "Organize your tasks and track progress."}
+            {board.description ||
+              "Organize your tasks and track progress."}
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={handleCreateColumn}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white hover:bg-violet-700"
-        >
-          <Plus size={17} />
-          Add column
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            role="status"
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold ${
+              realtimeStatus === "live"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : realtimeStatus === "offline"
+                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                  : "border-amber-200 bg-amber-50 text-amber-700"
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                realtimeStatus === "live"
+                  ? "bg-emerald-500"
+                  : realtimeStatus === "offline"
+                    ? "bg-rose-500"
+                    : "bg-amber-500"
+              }`}
+            />
+
+            {realtimeStatus === "live"
+              ? "Live updates"
+              : realtimeStatus === "joining"
+                ? "Joining board..."
+                : realtimeStatus === "reconnecting"
+                  ? "Reconnecting..."
+                  : realtimeStatus === "offline"
+                    ? "Realtime offline"
+                    : "Connecting..."}
+          </span>
+
+          <button
+            type="button"
+            onClick={handleCreateColumn}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white hover:bg-violet-700"
+          >
+            <Plus size={17} />
+            Add column
+          </button>
+        </div>
       </div>
+
+      {presenceNotice && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-violet-700">
+          <span>{presenceNotice}</span>
+
+          <button
+            type="button"
+            onClick={() => setPresenceNotice("")}
+            className="rounded-md px-2 py-1 text-violet-500 hover:bg-violet-100"
+            aria-label="Dismiss presence notification"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="mt-7 flex flex-wrap items-center gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
         <div className="flex items-center gap-2 font-semibold text-slate-700">
@@ -765,12 +1104,47 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
         </span>
       </div>
 
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-xs">
+          <span
+            className={`h-2 w-2 rounded-full ${
+              realtimeStatus === "live"
+                ? "bg-emerald-500"
+                : realtimeStatus === "joining" ||
+                    realtimeStatus === "connecting" ||
+                    realtimeStatus === "reconnecting"
+                  ? "bg-amber-500"
+                  : "bg-rose-500"
+            }`}
+          />
+
+          <span className="font-medium text-slate-500">
+            {realtimeStatus === "live"
+              ? "Live updates connected"
+              : realtimeStatus === "joining"
+                ? "Joining board..."
+                : realtimeStatus === "connecting"
+                  ? "Connecting to live updates..."
+                  : realtimeStatus === "reconnecting"
+                    ? "Connection interrupted — reconnecting..."
+                    : "Live updates unavailable"}
+          </span>
+        </div>
+
+        {presenceNotice && (
+          <p role="status" className="text-xs text-slate-500">
+            {presenceNotice}
+          </p>
+        )}
+      </div>
+
       {error && (
         <div
           role="alert"
           className="mt-5 flex items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
         >
           <span>{error}</span>
+
           <button
             type="button"
             onClick={() => setError("")}
@@ -784,20 +1158,32 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
       <div className="mt-7 overflow-x-auto pb-4">
         <DragDropProvider
           onDragStart={() => {
-            previousTasks.current = structuredClone(tasksRef.current);
+            previousTasks.current = structuredClone(
+              tasksRef.current
+            );
           }}
           onDragOver={(event) => {
-            if (event.operation.source?.type !== "task") return;
-
-            updateTasks((current) => move(current, event));
-          }}
-          onDragEnd={(event) => {
-            if (event.canceled) {
-              updateTasks(structuredClone(previousTasks.current));
+            if (
+              event.operation.source?.type !== "task"
+            ) {
               return;
             }
 
-            persistTaskOrder(structuredClone(tasksRef.current));
+            updateTasks((current) =>
+              move(current, event)
+            );
+          }}
+          onDragEnd={(event) => {
+            if (event.canceled) {
+              updateTasks(
+                structuredClone(previousTasks.current)
+              );
+              return;
+            }
+
+            persistTaskOrder(
+              structuredClone(tasksRef.current)
+            );
           }}
         >
           <div
@@ -807,7 +1193,9 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
                 columns.length,
                 1
               )}, minmax(270px, 1fr))`,
-              minWidth: `${Math.max(columns.length, 1) * 286}px`,
+              minWidth: `${
+                Math.max(columns.length, 1) * 286
+              }px`,
             }}
           >
             {columns.map((column, index) => (
@@ -816,7 +1204,9 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
                 column={column}
                 index={index}
                 tasks={tasksByColumn[column.id] || []}
-                onAddTask={(columnId) => openTaskForm(columnId)}
+                onAddTask={(columnId) =>
+                  openTaskForm(columnId)
+                }
                 onRename={handleRenameColumn}
                 onDeleteColumn={handleDeleteColumn}
                 onEditTask={openTaskForm}
@@ -828,16 +1218,18 @@ export default function KanbanBoard({ board, onBack, onBoardUpdated }) {
       </div>
 
       <p className="mt-1 text-xs leading-5 text-slate-400">
-        Changes are saved to the TaskFlow API. If a save fails, check the
-        error message and backend terminal before retrying.
+        Changes are saved to the TaskFlow API. If a save fails,
+        check the error message and backend terminal before retrying.
       </p>
 
       {taskModal && (
         <TaskFormModal
           task={taskModal.task}
           columnTitle={
-            columns.find((column) => column.id === taskModal.columnId)?.title ||
-            "this column"
+            columns.find(
+              (column) =>
+                column.id === taskModal.columnId
+            )?.title || "this column"
           }
           draft={draft}
           setDraft={setDraft}
