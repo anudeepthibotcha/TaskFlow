@@ -1,10 +1,11 @@
-
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import passport from "passport";
+
 import "./config/passport.js";
+
 import healthRoutes from "./routes/healthRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import boardRoutes from "./routes/boardRoutes.js";
@@ -29,32 +30,93 @@ app.use(cookieParser());
 // Initialize Passport without server-side sessions.
 app.use(passport.initialize());
 
-// Root endpoint
+// Root endpoint.
 app.get("/", (req, res) => {
-  res.status(200).json({
+  return res.status(200).json({
     success: true,
     message: "Welcome to TaskFlow API",
   });
 });
 
-// Day 1 health checks
+// Health checks.
 app.use("/api/health", healthRoutes);
 
-// Day 2 authentication routes
+// Authentication routes.
 app.use("/api/auth", authRoutes);
-app.use("/api/boards", boardRoutes);
-app.use("/api", columnRoutes);
-app.use("/api", taskRoutes);
 
-// Handle unknown routes
+// Board routes.
+app.use("/api/boards", boardRoutes);
+
+/*
+ * Match column endpoints before entering columnRoutes.
+ *
+ * This prevents router.use(requireAuth) inside columnRoutes
+ * from returning 401 for unrelated, nonexistent API paths.
+ */
+function matchesColumnRoute(path, method) {
+  const normalizedPath = path.replace(/\/+$/, "") || "/";
+
+  const isBoardColumnsRoute =
+    /^\/boards\/[^/]+\/columns$/.test(normalizedPath) &&
+    ["GET", "POST", "HEAD"].includes(method);
+
+  const isSingleColumnRoute =
+    /^\/columns\/[^/]+$/.test(normalizedPath) &&
+    ["PATCH", "DELETE"].includes(method);
+
+  return isBoardColumnsRoute || isSingleColumnRoute;
+}
+
+app.use("/api", (req, res, next) => {
+  if (!matchesColumnRoute(req.path, req.method)) {
+    return next();
+  }
+
+  return columnRoutes(req, res, next);
+});
+
+/*
+ * Match task endpoints before entering taskRoutes.
+ */
+function matchesTaskRoute(path, method) {
+  const normalizedPath = path.replace(/\/+$/, "") || "/";
+
+  const isBoardTasksRoute =
+    /^\/boards\/[^/]+\/tasks$/.test(normalizedPath) &&
+    ["GET", "POST", "HEAD"].includes(method);
+
+  const isReorderRoute =
+    /^\/boards\/[^/]+\/tasks\/reorder$/.test(normalizedPath) &&
+    method === "PATCH";
+
+  const isSingleTaskRoute =
+    /^\/tasks\/[^/]+$/.test(normalizedPath) &&
+    ["PATCH", "DELETE"].includes(method);
+
+  return (
+    isBoardTasksRoute ||
+    isReorderRoute ||
+    isSingleTaskRoute
+  );
+}
+
+app.use("/api", (req, res, next) => {
+  if (!matchesTaskRoute(req.path, req.method)) {
+    return next();
+  }
+
+  return taskRoutes(req, res, next);
+});
+
+// Handle unknown routes only after all route modules.
 app.use((req, res) => {
-  res.status(404).json({
+  return res.status(404).json({
     success: false,
     message: "Route not found",
   });
 });
 
-// Central error handler
+// Central error handler.
 app.use((error, req, res, next) => {
   if (res.headersSent) {
     return next(error);

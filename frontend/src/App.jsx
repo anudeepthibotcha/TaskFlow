@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
@@ -6,6 +5,7 @@ import {
   LayoutDashboard,
   ListTodo,
   LogOut,
+  Menu,
   Plus,
   Search,
   Settings,
@@ -182,6 +182,7 @@ export default function App() {
   const [creatingBoard, setCreatingBoard] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [error, setError] = useState("");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   async function loadBoards() {
     const result = await api("/boards");
@@ -335,7 +336,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f7f8fc] text-slate-800">
-      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col bg-slate-950 text-slate-300 lg:flex">
+      {mobileNavOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setMobileNavOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/40 lg:hidden"
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-slate-950 text-slate-300 transition-transform duration-200 ${
+          mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+        } lg:translate-x-0`}
+      >
         <div className="flex items-center gap-3 px-6 py-7">
           <div className="rounded-xl bg-violet-500 p-2.5 text-white">
             <CheckCircle2 size={23} />
@@ -364,6 +378,7 @@ export default function App() {
                   setActiveSection(item.name);
                   setSelectedBoard(null);
                   setError("");
+                  setMobileNavOpen(false);
                 }}
                 className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
                   selected
@@ -398,13 +413,24 @@ export default function App() {
 
       <div className="min-h-screen lg:pl-64">
         <header className="flex min-h-[72px] items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 sm:px-7">
-          <div>
-            <p className="text-xs text-slate-400">
-              Team Workspace / {selectedBoard?.name || activeSection}
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-800">
-              Welcome, {user.name}
-            </p>
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              type="button"
+              aria-label="Open navigation"
+              onClick={() => setMobileNavOpen(true)}
+              className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 lg:hidden"
+            >
+              <Menu size={21} />
+            </button>
+
+            <div className="min-w-0">
+              <p className="truncate text-xs text-slate-400">
+                Team Workspace / {selectedBoard?.name || activeSection}
+              </p>
+              <p className="mt-1 truncate text-sm font-semibold text-slate-800">
+                Welcome, {user.name}
+              </p>
+            </div>
           </div>
 
           {!selectedBoard && (

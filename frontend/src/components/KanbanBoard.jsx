@@ -482,6 +482,15 @@ export default function KanbanBoard({
   const [realtimeStatus, setRealtimeStatus] = useState("connecting");
   const [presenceNotice, setPresenceNotice] = useState("");
 
+  // Keep the latest parent callbacks without restarting the socket.
+  const onBackRef = useRef(onBack);
+  const onBoardUpdatedRef = useRef(onBoardUpdated);
+
+  useEffect(() => {
+    onBackRef.current = onBack;
+    onBoardUpdatedRef.current = onBoardUpdated;
+  }, [onBack, onBoardUpdated]);
+
   // Subscribe to live board changes.
   useEffect(() => {
     const socket = createTaskFlowSocket();
@@ -516,7 +525,7 @@ export default function KanbanBoard({
         setTasksByColumn(nextTasks);
 
         // Refresh dashboard summaries when a callback is provided.
-        await onBoardUpdated?.();
+        await onBoardUpdatedRef.current?.();
       } catch (err) {
         if (!active) return;
 
@@ -622,7 +631,7 @@ export default function KanbanBoard({
       );
 
       try {
-        await onBoardUpdated?.();
+        await onBoardUpdatedRef.current?.();
       } catch (err) {
         console.error(
           "Unable to refresh boards after deletion:",
@@ -630,7 +639,7 @@ export default function KanbanBoard({
         );
       } finally {
         if (active) {
-          onBack();
+          onBackRef.current?.();
         }
       }
     }
