@@ -71,7 +71,7 @@ router.post("/", async (req, res) => {
             owner: req.user._id,
           },
         ],
-        { session }
+        { session, ordered: true }
       );
 
       boardId = board._id;
@@ -94,7 +94,7 @@ router.post("/", async (req, res) => {
             position: 2,
           },
         ],
-        { session }
+        { session, ordered: true }
       );
     });
 
